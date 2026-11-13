@@ -1,0 +1,51 @@
+{
+  "name": "vela-fetch",
+  "version": "0.1.0",
+  "description": "Vela - a neutral desktop media downloader GUI powered by yt-dlp",
+  "main": "./out/main/index.js",
+  "author": "Vela contributors",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build:app": "electron-vite build",
+    "build": "npm run typecheck && electron-vite build && node scripts/package-win.mjs",
+    "package": "node scripts/package-win.mjs",
+    "package:portable": "node scripts/package-win.mjs --portable-only",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "binaries": "node scripts/fetch-binaries.mjs",
+    "icon": "node scripts/generate-icon.mjs",
+    "licenses": "node scripts/generate-third-party-licenses.mjs",
+    "sbom": "cyclonedx-npm --output-file release/bom.json",
+    "release:notes": "node scripts/release-notes.mjs"
+  },
+  "dependencies": {
+    "gsap": "^3.15.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "^7.0.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "archiver": "^8.0.0",
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

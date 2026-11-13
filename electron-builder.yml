@@ -1,0 +1,49 @@
+appId: app.vela.fetch
+productName: Vela
+copyright: Copyright © 2026 Vela contributors
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+extraResources:
+  - from: resources/bin
+    to: bin
+    filter:
+      - yt-dlp.exe
+      - ffmpeg.exe
+      - ffprobe.exe
+      - VERSIONS.json
+      - FFMPEG_*.txt
+extraFiles:
+  - from: resources/啟動.bat
+    to: 啟動.bat
+  - from: LICENSE
+    to: LICENSE.txt
+  - from: THIRD_PARTY_LICENSES.md
+    to: THIRD_PARTY_LICENSES.md
+  - from: DISCLAIMER.md
+    to: DISCLAIMER.md
+asar: true
+compression: maximum
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  requestedExecutionLevel: asInvoker
+  artifactName: Vela-${version}-Setup.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Vela
+  deleteAppDataOnUninstall: false
+  artifactName: Vela-${version}-Setup.${ext}
+publish: null

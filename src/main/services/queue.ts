@@ -316,11 +316,6 @@ export class DownloadQueue {
             if (entry.job.status !== 'merging') entry.job.status = 'downloading'
             this.emit(entry)
           },
-          onTitle: (value) => {
-            if (entry.desired !== 'run') return
-            entry.job.title = value.slice(0, 500)
-            this.emit(entry)
-          },
           onPhase: () => {
             if (entry.desired !== 'run') return
             entry.job.status = 'merging'

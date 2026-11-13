@@ -1,6 +1,6 @@
-import path from 'node:path'
+﻿import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { buildDownloadArgs, buildFormatSelector } from '@shared/args'
+import { buildDownloadArgs, buildFormatSelector, buildProbeArgs } from '@shared/args'
 import type { DownloadRequest } from '@shared/types'
 
 const outputTemplate = path.join('C:/Users/Test/Downloads/Vela', 'video.%(ext)s')
@@ -18,12 +18,25 @@ function makeRequest(overrides: Partial<DownloadRequest> = {}): DownloadRequest 
   }
 }
 
+describe('buildProbeArgs', () => {
+  it('forces UTF-8 encoding and keeps url after terminator', () => {
+    const args = buildProbeArgs('https://example.com/watch?v=abc')
+    expect(args).toContain('--encoding')
+    expect(args[args.indexOf('--encoding') + 1]).toBe('UTF-8')
+    expect(args.at(-2)).toBe('--')
+    expect(args.at(-1)).toBe('https://example.com/watch?v=abc')
+  })
+})
+
 describe('buildDownloadArgs', () => {
-  it('keeps the url after the terminator, has no --no-input, and uses no shell syntax', () => {
+  it('keeps the url after the terminator, has no --no-input, forces UTF-8, and uses no shell syntax', () => {
     const args = buildDownloadArgs({ request: makeRequest(), outputTemplate })
     expect(args.at(-2)).toBe('--')
     expect(args.at(-1)).toBe('https://example.com/watch?v=abc')
     expect(args).not.toContain('--no-input')
+    expect(args).toContain('--encoding')
+    expect(args[args.indexOf('--encoding') + 1]).toBe('UTF-8')
+    expect(args).not.toContain('before_dl:@@TITLE@@%(title)s')
     expect(args.every((arg) => typeof arg === 'string')).toBe(true)
   })
 

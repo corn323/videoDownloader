@@ -60,7 +60,7 @@ describe('DownloadQueue', () => {
     await fsp.rm(settings.downloadDir, { recursive: true, force: true }).catch(() => undefined)
   })
 
-  function makeQueue(overrides: { downloadImpl?: (input: unknown) => Promise<unknown>; cookies?: Record<string, unknown> } = {}) {
+  function makeQueue(overrides: { downloadImpl?: (input: unknown, callbacks?: unknown) => Promise<unknown>; cookies?: Record<string, unknown> } = {}) {
     const onUpdate = vi.fn()
     const ytdlp = {
       probe: vi.fn().mockResolvedValue({ title: 'Title', id: 'id', uploader: null, thumbnail: null, isPlaylist: false }),
@@ -269,5 +269,51 @@ describe('DownloadQueue', () => {
     await delay(50)
     expect(ytdlp.download).toHaveBeenCalled()
     expect(((ytdlp.download.mock.calls[0] as unknown[])![0] as { concurrentFragments: number }).concurrentFragments).toBe(8)
+  })
+
+  it('preserves correct Chinese title throughout queue, download progress and completion with Unicode output path', async () => {
+    const title = '繁體中文測試影片 - 玉米、婕報機器人'
+    const outputDir = path.join(settings.downloadDir, '測試下載')
+    settings.downloadDir = outputDir
+    await fsp.mkdir(outputDir, { recursive: true })
+    const outputPath = path.join(outputDir, `${title}.mp4`)
+    fs.writeFileSync(outputPath, 'x')
+
+    type Progress = { percent: number | null; downloadedBytes: number | null; totalBytes: number | null; speed: number | null; eta: number | null }
+    let progressCb: ((p: Progress) => void) | null = null
+    let phaseCb: (() => void) | null = null
+    const d = deferred<{ outputPath: string }>()
+    const { queue } = makeQueue({
+      downloadImpl: async (_input, callbacks) => {
+        const cb = callbacks as { onProgress: (p: Progress) => void; onPhase: () => void }
+        progressCb = cb.onProgress
+        phaseCb = cb.onPhase
+        return d.promise
+      }
+    })
+
+    const job = queue.add(makeRequest('https://example.com/zh', { title }))
+    expect(queue.list().find((j) => j.id === job.id)?.title).toBe(title)
+    await delay(30)
+    expect(queue.list().find((j) => j.id === job.id)?.title).toBe(title)
+
+    progressCb!({ percent: 42, downloadedBytes: 420, totalBytes: 1000, speed: 10, eta: 5 })
+    await delay(5)
+    const downloading = queue.list().find((j) => j.id === job.id)
+    expect(downloading?.title).toBe(title)
+    expect(downloading?.status).toBe('downloading')
+
+    phaseCb!()
+    await delay(5)
+    expect(queue.list().find((j) => j.id === job.id)?.title).toBe(title)
+
+    d.resolve({ outputPath })
+    await delay(60)
+    const done = queue.list().find((j) => j.id === job.id)
+    expect(done?.status).toBe('completed')
+    expect(done?.title).toBe(title)
+    expect(done?.outputPath).toBe(outputPath)
+    expect(path.basename(done?.outputPath ?? '')).toBe(`${title}.mp4`)
+    expect(fs.existsSync(outputPath)).toBe(true)
   })
 })

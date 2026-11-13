@@ -16,7 +16,6 @@ const SUBTITLE_EXTS = new Set(['.srt', '.vtt', '.ass', '.ssa', '.lrc', '.json3',
 
 export interface DownloadCallbacks {
   onProgress: (progress: ParsedProgress) => void
-  onTitle: (title: string) => void
   onPhase: (phase: 'merging') => void
 }
 
@@ -138,11 +137,6 @@ export class YtDlpService {
       onStdoutLine: (line) => {
         const progress = parseProgressLine(line)
         if (progress) callbacks.onProgress(progress)
-        const title = parseMarkedValue(line, '@@TITLE@@')
-        if (title) {
-          const cleanedTitle = cleanText(title, 500)
-          if (cleanedTitle) callbacks.onTitle(cleanedTitle)
-        }
         const file = parseMarkedValue(line, '@@FILE@@')
         if (file && !SUBTITLE_EXTS.has(path.extname(file).toLowerCase())) {
           try {

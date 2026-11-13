@@ -1,9 +1,15 @@
-name: Release
+﻿name: Release
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Existing version tag to release (e.g. v0.1.0). Must match package.json version.'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -11,7 +17,7 @@ permissions:
   attestations: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -25,13 +31,40 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
       CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
 
     steps:
-      - name: Checkout
+      - name: Resolve release tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          $tag = "$env:RELEASE_TAG".Trim()
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw "Release tag is required." }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+            throw "Invalid tag_name '$tag'. Expected an existing version tag like v0.1.0."
+          }
+          "tag=$tag" | Out-File -Append -FilePath $env:GITHUB_OUTPUT -Encoding utf8
+          Write-Host "Release tag: $tag"
+
+      - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ steps.release_tag.outputs.tag }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify tag exists and matches package.json
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.release_tag.outputs.tag }}"
+          git rev-parse -q --verify "refs/tags/$tag" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Tag '$tag' does not exist." }
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $expected = "v$($pkg.version)"
+          if ($tag -ne $expected) {
+            throw "Tag/package version mismatch: tag '$tag' but package.json version is '$($pkg.version)' (expected '$expected')."
+          }
+          Write-Host "Verified tag '$tag' matches package.json version '$($pkg.version)'."
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -63,6 +96,47 @@ jobs:
       - name: Generate release notes
         run: npm run release:notes
 
+      - name: Verify release artifacts and runtime
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $v = $pkg.version
+          $required = @(
+            "release/Vela-$v-Setup.exe",
+            "release/Vela-$v-win-x64-portable.zip",
+            "release/bom.json",
+            "release/SHA256SUMS.txt",
+            "release/RELEASE_NOTES.md"
+          )
+          foreach ($f in $required) {
+            if (!(Test-Path -LiteralPath $f)) { throw "Missing required release artifact: $f" }
+            $item = Get-Item -LiteralPath $f
+            if ($item.Length -le 0) { throw "Release artifact is empty: $f" }
+          }
+          $unpacked = "release/win-unpacked"
+          $runtime = @(
+            "Vela.exe","icudtl.dat","resources.pak","v8_context_snapshot.bin","snapshot_blob.bin",
+            "chrome_100_percent.pak","chrome_200_percent.pak","d3dcompiler_47.dll","dxcompiler.dll",
+            "ffmpeg.dll","vk_swiftshader.dll","vk_swiftshader_icd.json","vulkan-1.dll","resources/app.asar","啟動.bat"
+          )
+          foreach ($r in $runtime) {
+            $p = Join-Path $unpacked $r
+            if (!(Test-Path -LiteralPath $p)) { throw "Missing unpacked runtime file: $p" }
+          }
+          if (!(Test-Path -LiteralPath (Join-Path $unpacked 'locales'))) { throw "Missing unpacked locales directory" }
+          $localeCount = @(Get-ChildItem -LiteralPath (Join-Path $unpacked 'locales') -Filter *.pak -File -ErrorAction SilentlyContinue).Count
+          if ($localeCount -lt 1) { throw "No locale pak files found in unpacked runtime" }
+          $zipEntries = & tar.exe -tf "release/Vela-$v-win-x64-portable.zip"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to list portable zip contents" }
+          foreach ($needle in @("Vela/Vela.exe","Vela/icudtl.dat","Vela/resources/app.asar","Vela/locales/en-US.pak")) {
+            if (-not ($zipEntries | Where-Object { $_ -eq $needle })) { throw "Portable zip missing required entry: $needle" }
+          }
+          $sums = Get-Content "release/SHA256SUMS.txt" -Raw
+          foreach ($name in @("Vela-$v-Setup.exe","Vela-$v-win-x64-portable.zip","bom.json")) {
+            if ($sums -notmatch [regex]::Escape($name)) { throw "SHA256SUMS.txt missing entry for $name" }
+          }
+          Write-Host "Release artifacts, runtime, zip contents, and checksums verified."
+
       - name: Collect release subjects
         shell: pwsh
         run: |
@@ -80,17 +154,41 @@ jobs:
         with:
           subject-path: ${{ env.SUBJECTS }}
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         shell: bash
+        env:
+          TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            release/Vela-*.exe \
-            release/*.zip \
-            release/bom.json \
-            release/SHA256SUMS.txt \
-            release/RELEASE_NOTES.md \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Vela ${GITHUB_REF_NAME#v}" \
-            --notes-file release/RELEASE_NOTES.md \
-            --verify-tag \
-            --latest
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          TITLE="Vela ${VERSION}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG exists; updating notes and uploading assets with --clobber."
+            gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TITLE" \
+              --notes-file release/RELEASE_NOTES.md \
+              --verify-tag \
+              --latest
+            gh release upload "$TAG" \
+              release/Vela-*.exe \
+              release/*.zip \
+              release/bom.json \
+              release/SHA256SUMS.txt \
+              release/RELEASE_NOTES.md \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            echo "Creating release $TAG."
+            gh release create "$TAG" \
+              release/Vela-*.exe \
+              release/*.zip \
+              release/bom.json \
+              release/SHA256SUMS.txt \
+              release/RELEASE_NOTES.md \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TITLE" \
+              --notes-file release/RELEASE_NOTES.md \
+              --verify-tag \
+              --latest
+          fi

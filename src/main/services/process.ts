@@ -9,6 +9,7 @@ export interface RunProcessOptions {
   captureStdout?: boolean
   signal?: AbortSignal
   cwd?: string
+  env?: NodeJS.ProcessEnv
   missingCode?: ErrorCode
   onStdoutLine?: (line: string) => void
   onStderrLine?: (line: string) => void
@@ -51,6 +52,7 @@ export function runProcess(exe: string, args: string[], options: RunProcessOptio
         windowsHide: true,
         shell: false,
         cwd: options.cwd,
+        env: options.env ?? process.env,
         stdio: ['ignore', 'pipe', 'pipe']
       })
     } catch (error) {
@@ -60,8 +62,10 @@ export function runProcess(exe: string, args: string[], options: RunProcessOptio
 
     let stdout = ''
     let stderr = ''
-    let stdoutRest = ''
-    let stderrRest = ''
+    let stdoutBytes: Buffer = Buffer.alloc(0)
+    let stderrBytes: Buffer = Buffer.alloc(0)
+    const stdoutDecoder = new TextDecoder('utf-8')
+    const stderrDecoder = new TextDecoder('utf-8')
     let timedOut = false
     let aborted = false
     let overflow = false
@@ -73,12 +77,29 @@ export function runProcess(exe: string, args: string[], options: RunProcessOptio
       options.signal?.removeEventListener('abort', onAbort)
     }
 
+    const flushLines = (source: 'stdout' | 'stderr', final = false): void => {
+      const decoder = source === 'stdout' ? stdoutDecoder : stderrDecoder
+      let buffer = source === 'stdout' ? stdoutBytes : stderrBytes
+      if (buffer.length === 0 && !final) return
+      const decoded = decoder.decode(buffer, { stream: !final })
+      const split = splitLines(decoded)
+      for (const line of split.lines) {
+        const clean = stripAnsi(line)
+        if (source === 'stdout') options.onStdoutLine?.(clean)
+        else options.onStderrLine?.(clean)
+      }
+      const rest = split.rest
+      buffer = rest ? Buffer.from(rest, 'utf8') : Buffer.alloc(0)
+      if (source === 'stdout') stdoutBytes = buffer
+      else stderrBytes = buffer
+    }
+
     const finish = (code: number | null, error?: Error): void => {
       if (settled) return
       settled = true
       cleanup()
-      if (stdoutRest) options.onStdoutLine?.(stripAnsi(stdoutRest))
-      if (stderrRest) options.onStderrLine?.(stripAnsi(stderrRest))
+      flushLines('stdout', true)
+      flushLines('stderr', true)
       if (error) {
         reject(error)
         return
@@ -111,27 +132,26 @@ export function runProcess(exe: string, args: string[], options: RunProcessOptio
       finish(null, new AppError(code, sanitizeDetail(error.message)))
     })
 
-    child.stdout?.setEncoding('utf8')
-    child.stdout?.on('data', (chunk: string) => {
-      if (captureStdout) stdout = appendCapped(stdout, chunk, maxBuffer)
-      stdoutRest += chunk
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      const text = buf.toString('utf8')
+      if (captureStdout) stdout = appendCapped(stdout, text, maxBuffer)
+      stdoutBytes = Buffer.concat([stdoutBytes, buf])
       if (stdout.length + stderr.length > maxBuffer) {
         overflow = true
         killProcessTree(child.pid)
       }
-      const split = splitLines(stdoutRest)
-      stdoutRest = split.rest
-      for (const line of split.lines) options.onStdoutLine?.(stripAnsi(line))
+      flushLines('stdout')
+      if (stdoutBytes.length > 1024 * 1024) stdoutBytes = stdoutBytes.subarray(-512 * 1024)
     })
 
-    child.stderr?.setEncoding('utf8')
-    child.stderr?.on('data', (chunk: string) => {
-      stderr = appendCapped(stderr, chunk, Math.min(maxBuffer, 256 * 1024))
-      stderrRest += chunk
-      if (stderrRest.length > 1024 * 1024) stderrRest = stderrRest.slice(-512 * 1024)
-      const split = splitLines(stderrRest)
-      stderrRest = split.rest
-      for (const line of split.lines) options.onStderrLine?.(stripAnsi(line))
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      const text = buf.toString('utf8')
+      stderr = appendCapped(stderr, text, Math.min(maxBuffer, 256 * 1024))
+      stderrBytes = Buffer.concat([stderrBytes, buf])
+      if (stderrBytes.length > 1024 * 1024) stderrBytes = stderrBytes.subarray(-512 * 1024)
+      flushLines('stderr')
     })
 
     child.on('close', (code) => {
